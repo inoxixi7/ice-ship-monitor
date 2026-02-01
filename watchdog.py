@@ -4,10 +4,9 @@ import os
 import sys
 
 # ================= 配置区域 =================
-# 尝试从环境变量获取 (GitHub Actions 模式)
-# 如果本地运行没有配置环境变量，请手动填入你的 Token 和 ID 用于测试
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "你的_BOT_TOKEN_在这里(本地测试用)"
-CHAT_ID = os.environ.get("CHAT_ID") or "你的_CHAT_ID_在这里(本地测试用)"
+# 从环境变量获取，这样更安全，代码传到 GitHub 也不会泄露 Token
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
 # 监控设置
 TARGETS = [
@@ -15,13 +14,18 @@ TARGETS = [
         "date": "2026-02-28",
         "url": "https://www.ms-aurora.com/abashiri/reserves/new.php?ym=2026-02",
         "day_check": "28"
+    },
+    {
+        "date": "2026-03-01",
+        "url": "https://www.ms-aurora.com/abashiri/reserves/new.php?ym=2026-03",
+        "day_check": "1"
     }
 ]
 # ===========================================
 
 def send_telegram_message(message):
     if not BOT_TOKEN or not CHAT_ID:
-        print("❌ Error: Token or Chat ID not found.")
+        print("Error: Token or Chat ID not found.")
         return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -31,8 +35,7 @@ def send_telegram_message(message):
         "parse_mode": "Markdown"
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram 推送状态: {resp.status_code}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Telegram Error: {e}")
 
@@ -40,7 +43,6 @@ def check_site():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    # 正常模式找这俩，测试模式我们反着来
     AVAILABLE_SYMBOLS = ['○', '△'] 
 
     for target in TARGETS:
@@ -56,46 +58,46 @@ def check_site():
 
             soup = BeautifulSoup(r.text, 'html.parser')
             
+            # 搜索 td (修正版逻辑)
             for cell in soup.find_all(['td', 'th']):
                 cell_text = cell.get_text(strip=True)
                 if cell_text.startswith(day_to_find):
                     remaining = cell_text[len(day_to_find):]
                     if remaining and remaining[0].isdigit(): continue 
                     
-                    # === 判定逻辑 ===
+                    # 检查符号
                     is_available = False
-                    status_symbol = "满/×" # 默认假设是满的
-
+                    status_symbol = ""
                     for symbol in AVAILABLE_SYMBOLS:
                         if symbol in cell_text:
                             is_available = True
                             status_symbol = symbol
                             break
                     
-                    # =========================================
-                    # 👇【反转逻辑核心】👇
-                    # 只要没票 (not is_available)，就发通知！
-                    # =========================================
-                    if not is_available:
+                    if is_available:
+                        # 尝试提取链接
+                        click_url = target_url
+                        link_tag = cell.find('a')
+                        if link_tag and link_tag.get('href'):
+                            href = link_tag.get('href')
+                            if not href.startswith('http'):
+                                click_url = "https://www.ms-aurora.com/abashiri/reserves/" + href
+                            else:
+                                click_url = href
+
                         msg = (
-                            f"🧪 **GitHub Actions 测试成功** 🧪\n\n"
-                            f"我成功访问了网站，并找到了日期！\n"
+                            f"🚨 **发现空位！(GitHub Action)** 🚨\n\n"
                             f"📅 日期: {date_str}\n"
-                            f"👀 实际看到的状态: `{cell_text}`\n"
-                            f"✅ **这证明你的自动监控流水线已经通了！**"
+                            f"ℹ️ 状态: {status_symbol}\n"
+                            f"🔗 [点击立即预约]({click_url})"
                         )
-                        print(f"TEST TRIGGER: Found {date_str} with status {cell_text}")
+                        print(f"FOUND: {date_str}")
                         send_telegram_message(msg)
                     else:
-                        print(f"竟然有票？状态是: {status_symbol}")
-                    
-                    # 找到一个就退出，避免发多条
-                    return 
-
+                        print(f"Not found: {date_str}")
+                    break
         except Exception as e:
             print(f"Error: {e}")
-            # 如果报错了，也发个 Telegram 告诉你报错了，方便调试
-            send_telegram_message(f"❌ 脚本运行出错: {str(e)}")
 
 if __name__ == "__main__":
     check_site()
